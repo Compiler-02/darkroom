@@ -149,7 +149,7 @@ In practice, this platform provides enough resources to compile much larger pipe
 
 ![2017-12-13_21_28_03](2017-12-13_21_28_03.jpg)
 
-###Comparison
+### Comparison
 
 For ISP, we compared Darkroom to our internal reference code written as **clean C**. Our reference code has **no multithreading, vectorization, or line buffering**. Enabling these optimizations by reimplementing it in Darkroom yielded a **7x speedup**, with source code of similar complexity. Of this speedup, **3.5x comes from multithreading**, and **2x comes from vectorization**.
 
