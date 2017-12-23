@@ -37,8 +37,47 @@ ISP由许多个固定功能的ASIC流水线组成。每个流水线执行以下�
 访存能耗是计算的1000倍，因此能耗主要由访存决定。但把数据从移动设备发送到服务器上处理的能耗更是致命的——是本地计算的1000000倍。移动设备中，能耗十分关键。
 
 
+## 3.编程模型
 
+darkroom是基于terra的一种用于图像处理的领域专用语言（Domain Specified Language)。可以把每一步进行计算的图像看作关于二维坐标
+的函数，称之为图像函数。
 
+### 3.1 符号
+
+在darkroom中，图像函数可以用类lambda表达式的语法，im(x,y)。比如，一个简单的亮度调节操作可以写成以下形式：
+
+	brighter = im(x,y) I(x,y) * 1.1 end
+
+为了实现模板（stencil），比如卷积，darkroom允许图像函数访问邻近的像素：
+
+	convolve = im(x,y) (1*I(x-1,y)+2*I(x,y)+1*I(x+1,y))/4 end
+
+darkroom中还可以用gather操作实现元素的包裹（wrap）。
+
+darkroom为适应行缓冲流水线（line-buffer pipeline），有以下约束：
+	1.图像函数只能访问 (1)位置(x+A,y+B)，其中A，B是常数，或者(2)gather操作。仿射变换的坐标，像I(x*2,y*2)是不被允许的。这个约束意味着每一步处理生产（像素输入）和消费（像素运算并输出）的速率是一样的，这是行缓冲流水线所要求的。
+	2.图像函数不能是递归的。
+
+### 3.2 darkroom中的一个简单的流水线
+
+下面是darkroom中的一个简单的示例程序。锐化操作通过增大图像I与它的一份模糊拷贝的差异来锐化图像I，加强了其高频分量。
+
+	bx = im(x,y) (I(x-1,y) + I(x,y) + I(x+1,y))/3 end
+	by = im(x,y) (bx(x,y-1) + bx(x,y) + bx(x,y+1))/3 end
+	difference = im(x,y) I(x,y)-by(x,y) end
+	scaled = im(x,y) 0.1 * difference(x,y) end
+	sharpened = im(x,y) I(x,y) + scaled(x,y) end
+
+最后三个图像函数：difference,scaled,sharpened，是点对点（pointwise）操作，所以我们可将这段代码折叠成两步：
+
+	S1 = im(x,y) (I(x-1,y) + I(x,y) + I(x+1,y))/3 end
+	S2 = im(x,y)
+		   I(x,y) + 0.1*(I(x,y)-(S1(x,y-1) + S1(x,y) + S1(x,y+1))/3)
+		 end
+
+![](example_pipeline.png)
+
+它不能不改变模板而再进一步折叠。值得注意，这不是一个线性的流水线，而是一个关于模板的一般的有向无环图（DAG）。在这个例子中，最后的锐化结果是关于水平模糊的结果和原始图像的模板。
 
 
 ## 5. Implementation
