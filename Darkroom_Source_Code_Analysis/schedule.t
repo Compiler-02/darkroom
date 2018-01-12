@@ -13,6 +13,9 @@ function schedule(graph)
       if node.kernel~=nil then 
         shifts[node] = 0
         for k,v in node:inputs() do
+          -- 对该结点每一个输入，找到该输入最晚的引用，再加上该输入目前的偏移，就是该结点的偏移
+          -- 比如，对LatN，Rel1最晚的引用是x+1，而Rel的计算本身比Lat晚1,假设偏移为1,
+          -- 则LatN偏移为2（各函数介绍见report.md）
           local s = node:maxUse(v) + shifts[v]
           if s > shifts[node] then shifts[node] = s end
         end
@@ -41,7 +44,7 @@ end
 
 function shift(graph, shifts)
   assert(darkroom.kernelGraph.isKernelGraph(graph))
-
+  -- 利用shift函数优化shift
   local oldToNewRemap = {}
   local newToOldRemap = {}
   local newShifts = {} -- other compile stages use the shifts later
