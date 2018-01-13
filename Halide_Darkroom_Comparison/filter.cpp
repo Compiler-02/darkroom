@@ -1,4 +1,4 @@
-//halide/filter/filter.cpp
+//halide/xxx/filter.cpp
 //g++ filter.cpp -g -I ../include -I ../tools -L ../bin -lHalide `libpng-config --cflags --ldflags` -ljpeg -lpthread -ldl -o filter -std=c++11
 
 #include "Halide.h"
