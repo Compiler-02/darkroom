@@ -104,82 +104,67 @@ darkroom为适应行缓冲流水线（line-buffer pipeline），有以下约束�
 在上图中我们在最后的流水线里可以看到有一个缓冲节点用于存储前一时刻的Obs值，但如果我们将Obs后移一个时刻，则这个缓冲节点就不需要了。我们可以通过选择合适的移位操作来保证流水线的因果性以及最小化缓冲长度。
 
 
-## 5. Implementation
 
-After generating an optimized line-buffered pipeline, our compiler instantiates concrete versions of the pipeline as ASIC or FPGA hardware designs, or code for CPUs. 
+##5. 实现
 
-Darkroom programs are first **converted into an intermediate representation (IR)** that **forms a DAG of high-level stencil operations**. Then we perform standard compiler optimizations such as **common sub-expression elimination** and **constant propagation** on this IR. A program analysis is done on this IR to **generate the ILP formulation of line buffer optimization**. We solve for the optimal shifts using an off-the-shelf ILP solver (**lpsolve**), and use them to **construct the optimized pipeline**. The optimized pipeline is then fed as input to either the hardware generator, which **creates ASIC designs and FPGA code, or** the software compiler, which creates **CPU code**.
+生成了优化的行缓冲流水线之后，编译器继续讲其编译到硬件，生成ASIC或FPGA代码，或是CPU代码。
 
-![2017-12-13_20_23_23](2017-12-13_20_23_23.jpg)
+编译器首先生成一份中间表示(IR)，用有向无环图(DAG)的形式表示高层次的stencil操作。之后对其进行一般编译器的优化例如公共子表达式外提、常量传播等。然后进行程序分析，生成和行缓冲优化等价的整数线性规划方程(ILP)。我们的使用已有的ILP解答器lpsolve来求解这一问题，以此生成优化后的流水线。最后将流水线交给硬件代码生成器，生成ASIC或FPGA代码，或是CPU代码。
 
-### 5.1 ASIC & FPGA synthesis
 
-Our hardware generator implements **line buffers** as circularly addressed SRAMs or BRAMs. Each clock, a column of pixel data from the line buffer shifts into **a 2D array of registers**. The user’s image function is implemented as **combinational logic**, writing into an **output register**. 
 
-![2017-12-13_20_26_10](2017-12-13_20_26_10.jpg)
+###5.1 ASIC & FPGA综合
 
-We only support programs that are **straight pipelines** with **one input, one output, and a single consumer of each intermediate**.
+我们的硬件生成器将每个行缓冲实现为一个循环SRAM或BRAM。每个clock一列像素数据从行缓冲进入到一个二维寄存器阵列。用户的图像函数实现为组合逻辑，把结果写到输出寄存器，
 
-Image functions have **multiple inputs and multiple outputs**. In order to support these programs, we translate the Darkroom program into an equivalent Darkroom program that is a straight pipeline. **The merging of nodes** in the programs can **create larger line buffers** than what could be achieved with a hardware implementation that supported DAG pipelines. 
 
-![2017-12-13_20_33_15](2017-12-13_20_33_15.jpg)
 
-###5.2 CPU compilation
+实际的图像函数往往是多输入多输出的，我们采用结点合并的方法将其转化为单输入单输出的。
 
-Our CPU compiler implements the line-buffered pipeline as a multi-threaded function. To enable parallelism, we **tile the output image into multiple strips** and** compute each strip** on a different core. Intermediates along strip boundaries are **recomputed**.
 
-**Within a thread**, the code follows **the line-buffered pipeline model**. A simple approach is to **have the thread’s main loop correspond to one clock cycle of the hardware**. However, the entire set of **line buffers will often exceed** the size of the fastest level of cache. 
 
-We found that blocking the computation at the granularity of lines improved locality for this cache. The main loop calculates one line of each stencil operation with the line buffers expanded to the granularity of lines. In addition to keeping the line buffer values in the fastest level of the cache, this blocking reduces register spills in the inner loop by reducing the number of live induction variables. A stencil stage S2 that consumes from S1 yields the following code:
+###5.2 CPU 编译
 
-![2017-12-13_20_43_01](2017-12-13_20_43_01.jpg)
+CPU编译器将行缓冲流水线实现为多线程函数。为了实现并行，我们将输入图像分成许多strip然后分别计算。每个线程里，core遵循行缓冲流水线模型，一种简单的方法是每个clock计算一次主循环。但是整个行缓冲经常超过最高一级cache的大小。
 
-To exploit vector instructions available on modern hardware, we **vectorize the computation** within each line of each stage.
-Line buffers are implemented using a small block of memory that we ensure stays in cache using the technique of Gummaraju and Rosenblum to simulate a scratchpad memory by restricting most memory access to this block and issuing non-temporal writes for our output images. We manage the modular arithmetic of the line buffers in the outer loop over the lines of an image so that each inner loop over pixels contains fewer instructions. 
+我们发现可以通过把计算阻塞在line这个粒度层面上可以提供cache的局部性。
 
-## 6. Results
 
-To evaluate Darkroom, we implemented a camera pipeline (ISP), and three possible future extensions—CORNER DETECTION, EDGE DETECTION, and DEBLUR—in hardware. 
 
-**ISP** includes basic raw conversion operations (demosaicing, white balance, and color correction), in addition to enhancement and error correction operations (crosstalk correction, dead pixel suppression, and black level correction). Mapping ISP to Darkroom is straightforward: it is a linear pipeline of stencil operations, each of which becomes an image function.
+我们在外层循环里对行缓冲做模运算，这样内存循环就可以包含尽可能少的指令。如果发现硬件支持向量指令，也会在每个阶段每一行里实现向量计算。
 
-![2017-12-13_21_19_56](2017-12-13_21_19_56.jpg)
+##6. 结果
 
-**CORNER DETECTION** is a classic corner detection algorithm, used as an early stage in many computer vision algorithms, and implemented as a series of local stencils. 
+这里使用ISP，CORNER DETECTION, EDGE DETECTION和DEBLUR来测量Darkroom的性能。
 
-![2017-12-13_21_22_02](2017-12-13_21_22_02.jpg)
+**ISP** 包含基本的原始转换，比如去马赛克、白平衡、色矫正，以及一些增强和错误矫正操作，比如死像素点抑制。把ISP转换到Darkroom是简单而直接的：每个流水线对应一个转换成图像函数的stencil操作。
 
-**EDGE DETECTION** is a classic edge detection algorithm. It first takes a gradient of the image in x and y, classifies pixels as edges at local gradient maxima, and finally traces along these edge pixels sequentially. To implement this algorithm in Darkroom, we adapted the classic serial algorithm into a parallel equivalent, at the expense of some wasted computation and bounded information propagation. EDGE DETECTION traditionally requires a long sequential iteration, which does not fit within the Darkroom model. Our implementation demonstrates that it is possible to work around some restrictions in our programming model, widening the range of applications we support at the cost of efficiency. 
 
-![2017-12-13_21_20_25](2017-12-13_21_20_25.jpg)
 
-**DEBLUR** is an implementation of the Richardson-Lucy non-blind deconvolution algorithm. DEBLUR is computationally-intense iterative algorithm, which we use as a stress test of our system. We unrolled DEBLUR to 8 iterations, which was the maximum size our hardware synthesis tools could support.
+**CORNER DETECTION** 是经典的角点检测算法，该算法经常用于计算机视觉算法的前期处理，实现为一系列局部stencil操作。 将与邻点亮度对比足够大的点定义为角点。
 
-![2017-12-13_21_22_27](2017-12-13_21_22_27.jpg)
 
-### Throughput
 
-In ASIC, a single pipeline achieves 940-1040 megapixels/sec, enough to process 16 megapixel images at 60 FPS. On the FPGA, a single-pixel pipeline achieves 125-145 megapixels/sec, enough to process 1080p/60 in real-time (124 megapixels/sec).
+**EDGE DETECTION** 采用的是经典的边缘检测算法。首先计算图像在x和y方向的梯度，然后对其分类，最终跟踪其中的序列化像素。边缘检测需要长序列迭代，这和darkroom的模型不完全符合。实现该算法的目的是为了证明Darkroom在其不擅长的领域也能有比较好的表现。
 
-![2017-12-13_21_24_19](2017-12-13_21_24_19.jpg)
 
-### Resource
 
-We see that the dominant area cost is memory and logic for line buffers. The computational logic and all other overhead uses at most half the total area.
+**DEBLUR** 实现了Richardson-Lucy non-blind deconvolution algorithm。去模糊对迭代计算力的要求非常高，我们实现该算法的目的是对系统的进行压力测试。我们的实现了8次迭代，这是由硬件所限制的。
 
-![2017-12-13_21_26_29](2017-12-13_21_26_29.jpg)
 
-In practice, this platform provides enough resources to compile much larger pipelines, implementing multiple vision and image processing algorithms simultaneously in real-time.
 
-![2017-12-13_21_28_03](2017-12-13_21_28_03.jpg)
+###吞吐量
 
-### Comparison
+ASIC单流水线速度可以处理1600万像素的图像60 FPS.在FPGA上这个数字是1080p/60.
 
-For ISP, we compared Darkroom to our internal reference code written as **clean C**. Our reference code has **no multithreading, vectorization, or line buffering**. Enabling these optimizations by reimplementing it in Darkroom yielded a **7x speedup**, with source code of similar complexity. Of this speedup, **3.5x comes from multithreading**, and **2x comes from vectorization**.
 
-We also compared Darkroom to **Halide**, an existing high performance image processing language and compiler, on the DEBLUR application. We see **similar performance** from both Halideand Darkroom-compiled implementations of DEBLUR, but Darkroom’s schedule optimization takes **under 1 second** and the total **compile time** takes **less than 2 minutes**, while the Halide autotuner required **8 hours** to find a comparably performing schedule.
 
-![2017-12-13_21_40_52](2017-12-13_21_40_52.jpg)
+###比较
+
+对ISP，非多线程、非向量化的代码比开启了这些优化的代码，后者有七倍的加速效果。在这些加速效果中，3.5倍来自多线程，2倍来自向量化。
+
+Darkroom和Halide（一种现存的高性能的图像处理语言和编译器）相比，在去模糊这项应用上，二者的运行时时间是相似的。但是编译时间，Darkroom全部优化只用了不到一秒，总的编译时间不超过两分钟，但是Halide用了 八小时。
+
 
 
 
