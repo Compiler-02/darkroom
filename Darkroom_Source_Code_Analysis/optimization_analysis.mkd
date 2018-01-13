@@ -1,0 +1,122 @@
+# 数学运算优化
+## 常量折叠
+计算常量表达式
+
+```
+function darkroom.optimize.constantFold(ast)
+```
+
+## 加法 
+加0返回本身。
+```
+if ast.op=="+" and lhs.kind=="value" and darkroom.optimize.isZero(lhs.value) then
+      return ast.rhs
+
+```
+
+## 乘除削弱
+卷积对乘除运算开销大，尽量转换为其他运算。
+### 削弱表达式强度
+对二的幂次的乘除转为移位运算。
+
+```
+if ast.rhs.value==math.pow(2,pow2) then
+            if darkroom.optimize.verbose then
+              print("divok",ast.translate1_lhs, ast.translate2_lhs,ast.translate1_rhs, ast.translate2_rhs)
+            end
+
+            -- we can turn this into a right shift
+            local nn = ast:shallowcopy()
+            local nv = {kind="value",value=pow2,type=darkroom.type.uint(32)}
+            nv = darkroom.internalIR.new(nv):copyMetadataFrom(ast.rhs)
+            nn.rhs = nv
+            nn.translate1_rhs = 0
+            nn.translate2_rhs = 0
+            nn.scale1_rhs = 1
+            nn.scale2_rhs = 1
+
+
+            nn.op=">>"
+            local res = darkroom.internalIR.new(nn):copyMetadataFrom(ast)
+
+            if false then -- for debugging
+              local cond = {kind="binop",op="==",lhs=ast,rhs=res,type=darkroom.type.bool(),
+                            translate1_lhs=0,translate2_lhs=0,scale1_lhs=1,scale2_lhs=1,
+                            translate1_rhs=0,translate2_rhs=0,scale1_rhs=1,scale2_rhs=1}
+              cond = darkroom.internalIR.new(cond):copyMetadataFrom(ast)
+              local asrt = {kind="assert",expr=res,printval=ast.lhs,cond=cond,type=res.type,
+                            translate1_expr=0,translate2_expr=0,scale1_expr=1,scale2_expr=1,
+                            translate1_cond=0,translate2_cond=0,scale1_cond=1,scale2_cond=1,
+                            translate1_printval=0,translate2_printval=0,scale1_printval=1,scale2_printval=1}
+              
+              darkroom.internalIR.new(asrt):copyMetadataFrom(ast)
+
+              return asrt
+            end
+
+
+```
+
+但有一个问题：
+对负数-109（10010011）
+移位运算后得到11001001=-55，但除法运算的-109/2==-54
+
+### 乘1运算
+返回被乘1的数。
+```
+elseif ast.op=="*" and ast.rhs.kind=="value" and ast.rhs.value==1 then
+          return ast.lhs
+```
+
+
+### 乘0运算
+返回是0的那个操作数，也就是返回零。
+
+![](multi_const.png)
+
+## 对（a+b）/3形式的卷积优化
+转换为a/3+b/3形式。对ast进行修改。
+
+这样有利于卷积引擎（convolutional engine）的在map算子中填充更多项（即要除以3的项更多）。所谓卷积引擎，可以由以下的公式说明：
+
+![卷积通式](conv.png)
+
+比如我们一般使用的卷积，Map对应乘法，R（Reduce）函数对应累加。
+
+```
+ast = ast:S("binop"):process(function(ast)
+    if ast.op=="/" and 
+       ast.rhs.kind=="value" and 
+       ast.lhs.kind=="binop" and 
+       ast.lhs.op=="+" then
+      print("DISTRIBUTE")
+      local lhsdivop = darkroom.ast.binop("/",ast.lhs.lhs,ast.rhs)
+      local rhsdivop = darkroom.ast.binop("/",ast.lhs.rhs,ast.rhs)
+      local resast=darkroom.ast.binop("+",lhsdivop,rhsdivop)
+      return darkroom._toTypedAST(resast)
+    end
+    return ast
+  end)
+
+```
+
+# cast的常量传播
+darkroom提供显式的数据类型转换。
+
+操作举例：
+```
+[uint8[3]](inputImage(x,y)*0.9)
+```
+
+意思是，将括号中的inputImage(x,y)*0.9转换为一个uint8类型的，长度为3的数组。
+
+如果编译时可以得到数组的长度信息，而且被转换的是常数，那么就直接建立一个数组，并复制常数值到每一项。
+
+这种优化用于二元运算对操作数的处理。
+
+```
+for i=1,darkroom.type.arrayLength(ast.type) do newval[i] = ast.expr.value end
+
+```
+
+
